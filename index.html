@@ -183,12 +183,12 @@
             orbRing = new THREE.Group();
             orbRing.position.y = 22;
 
-            const orbCount = 7;
+            const orbCount = 8;
             const ringRadius = 140;
-            const orbRadius = 5;
+            const portraitSize = 24;
+            const glowSize = 27;
 
             const ringGeom = new THREE.TorusGeometry(ringRadius, 0.7, 16, 640);
-            const reflectionDim = 0.04;
             const ringMat = new THREE.MeshStandardMaterial({
                 color: 0x1a4dff,
                 emissive: 0x4aa0ff,
@@ -200,37 +200,108 @@
             ring.rotation.x = Math.PI / 2;
             orbRing.add(ring);
 
-            const orbGeom = new THREE.SphereGeometry(orbRadius, 32, 32);
-            const orbMat = new THREE.MeshStandardMaterial({
-                color: 0x4a90ff,
-                emissive: 0x5aaaff,
-                emissiveIntensity: 7,
-                metalness: 0.3,
-                roughness: 0.15,
-            });
+            const portraitFiles = [
+                'tohunga/dr-teina-rongo.jpg',
+                'tohunga/mike-tavioni.jpg',
+                'tohunga/peia-patai.jpg',
+                'tohunga/ben-koteka.jpg',
+                'tohunga/ian-tairea.jpg',
+                'tohunga/victor-mataora.jpg',
+                'tohunga/alanna-smith.jpg',
+                'tohunga/liam-kokaua.jpg',
+            ];
+
+            function makeGlowTexture() {
+                const size = 256;
+                const c = document.createElement('canvas');
+                c.width = c.height = size;
+                const ctx = c.getContext('2d');
+                const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+                g.addColorStop(0.0, 'rgba(255,255,255,0)');
+                g.addColorStop(0.82, 'rgba(255,255,255,0)');
+                g.addColorStop(0.9, 'rgba(255,255,255,1)');
+                g.addColorStop(1.0, 'rgba(255,255,255,0)');
+                ctx.fillStyle = g;
+                ctx.fillRect(0, 0, size, size);
+                return new THREE.CanvasTexture(c);
+            }
+
+            function makeCircularPortraitTexture(url) {
+                const size = 512;
+                const c = document.createElement('canvas');
+                c.width = c.height = size;
+                const ctx = c.getContext('2d');
+                const tex = new THREE.CanvasTexture(c);
+                tex.colorSpace = THREE.SRGBColorSpace;
+                tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+                const img = new Image();
+                img.onload = () => {
+                    ctx.clearRect(0, 0, size, size);
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+                    ctx.closePath();
+                    ctx.clip();
+                    const ar = img.width / img.height;
+                    let sw, sh, sx, sy;
+                    if (ar > 1) { sh = img.height; sw = sh; sx = (img.width - sw) / 2; sy = 0; }
+                    else { sw = img.width; sh = sw; sx = 0; sy = (img.height - sh) / 2; }
+                    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, size, size);
+                    ctx.restore();
+                    tex.needsUpdate = true;
+                };
+                img.src = url;
+                return tex;
+            }
+
+            const glowTexture = makeGlowTexture();
 
             for (let i = 0; i < orbCount; i++) {
                 const angle = (i / orbCount) * Math.PI * 2;
-                const orb = new THREE.Mesh(orbGeom, orbMat);
-                orb.position.set(Math.cos(angle) * ringRadius, 0, Math.sin(angle) * ringRadius);
-                orbRing.add(orb);
+                const x = Math.cos(angle) * ringRadius;
+                const z = Math.sin(angle) * ringRadius;
+
+                const glowMat = new THREE.SpriteMaterial({
+                    map: glowTexture,
+                    color: 0x4aa0ff,
+                    transparent: true,
+                    depthWrite: false,
+                    depthTest: false,
+                    blending: THREE.AdditiveBlending,
+                });
+                const glowSprite = new THREE.Sprite(glowMat);
+                glowSprite.position.set(x, 0, z);
+                glowSprite.scale.set(glowSize, glowSize, 1);
+                glowSprite.renderOrder = 2;
+                orbRing.add(glowSprite);
+
+                const portraitTex = makeCircularPortraitTexture(portraitFiles[i]);
+                const portraitMat = new THREE.SpriteMaterial({
+                    map: portraitTex,
+                    transparent: true,
+                    depthWrite: false,
+                    depthTest: false,
+                });
+                const portraitSprite = new THREE.Sprite(portraitMat);
+                portraitSprite.position.set(x, 0, z);
+                portraitSprite.scale.set(portraitSize, portraitSize, 1);
+                portraitSprite.renderOrder = 3;
+                orbRing.add(portraitSprite);
 
                 const orbLight = new THREE.PointLight(0x4a9eff, 5, 150, 2);
-                orbLight.position.copy(orb.position);
+                orbLight.position.set(x, 0, z);
                 orbRing.add(orbLight);
             }
 
             scene.add(orbRing);
 
-            // Dim the ring/orbs' emissive while the water's reflection pass renders,
-            // so they don't show up as bright blobs on the water surface.
-            const dimMats = [ringMat, orbMat];
-            const origEmissive = dimMats.map((m) => m.emissiveIntensity);
+            // Hide the orb ring entirely during the water's reflection pass,
+            // so portraits/glow/ring don't show up as bright blobs on the water surface.
             const waterRender = water.onBeforeRender;
             water.onBeforeRender = function (renderer, scene, camera) {
-                dimMats.forEach((m, i) => { m.emissiveIntensity = origEmissive[i] * reflectionDim; });
+                orbRing.visible = false;
                 waterRender.call(this, renderer, scene, camera);
-                dimMats.forEach((m, i) => { m.emissiveIntensity = origEmissive[i]; });
+                orbRing.visible = true;
             };
 
             // --- Postprocessing (bloom) ---
@@ -355,9 +426,12 @@
             if (orbRing) {
                 const t = performance.now() * 0.001;
                 orbRing.position.y = 22 + Math.sin(t * 0.6) * 1.5;
-                if (!drag.active && Math.abs(drag.velocity) > 1e-4) {
-                    orbRing.rotation.y += drag.velocity;
-                    drag.velocity *= 0.94;
+                if (!drag.active) {
+                    orbRing.rotation.y += 0.05 * dt;
+                    if (Math.abs(drag.velocity) > 1e-4) {
+                        orbRing.rotation.y += drag.velocity;
+                        drag.velocity *= 0.94;
+                    }
                 }
             }
             composer.render();
